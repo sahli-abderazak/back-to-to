@@ -8,7 +8,9 @@ use App\Models\MatchingScore;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Smalot\PdfParser\Parser;
-
+use PhpOffice\PhpWord\IOFactory as WordIOFactory;
+use PhpOffice\PhpWord\Element\Text;
+use PhpOffice\PhpWord\Element\TextRun;
 class MatchingScoreController extends Controller
 {
     public function calculateMatchingScore(Request $request)
@@ -44,9 +46,10 @@ class MatchingScoreController extends Controller
 
         // Envoyer les données à FastAPI pour obtenir le score de matching
         try {
-            $response = Http::post('http://127.0.0.1:8002/match-cv-offre', [
+            $response = Http::post('http://127.0.0.1:8003/match-cv-offre', [
                 'cv' => $cv_text,
                 'offre' => [
+                    'poste' => $offre->poste,
                     'description' => $offre->description,
                     'niveauExperience' => $offre->niveauExperience,
                     'niveauEtude' => $offre->niveauEtude,

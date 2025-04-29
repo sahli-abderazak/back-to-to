@@ -123,10 +123,11 @@ public function storeCandidat(Request $request)
     $offre = Offre::find($request->offre_id);
 
     // Appel à l'API FastAPI pour obtenir le score de matching entre le CV et l'offre
-    $response = Http::post('http://127.0.0.1:8002/match-cv-offre', [
+    $response = Http::post('http://127.0.0.1:8003/match-cv-offre', [
         'cv' => $cvText,
         'offre' => [
             'id' => $offre->id,
+            'poste' => $offre->poste,
             'description' => $offre->description,
             'niveauExperience' => $offre->niveauExperience,
             'niveauEtude' => $offre->niveauEtude,

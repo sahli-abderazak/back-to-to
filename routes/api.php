@@ -153,3 +153,4 @@ Route::post('/candidat-by-email', [CandidatController::class, 'getCandidatByEmai
 Route::post('/generate-image-question', [TestAIController::class, 'generateImageQuestion']);
 Route::post('/analyze-personality', [TestAIController::class, 'analyzePersonality']);
 Route::post('/matching-score', [MatchingScoreController::class, 'calculateMatchingScore']);
+Route::get('/test-responses/{candidat_id}/{offre_id}', [TestAIController::class, 'getTestResponses']);

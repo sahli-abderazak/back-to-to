@@ -79,7 +79,23 @@ public function ajoutOffre(Request $request)
         'responsabilite' => 'required|string',
         'experience' => 'required|string',
         'matching' => 'nullable|numeric|min:0|max:100',
+        'poids_ouverture' => 'required|numeric|min:2',
+        'poids_conscience' => 'required|numeric|min:2',
+        'poids_extraversion' => 'required|numeric|min:2',
+        'poids_agreabilite' => 'required|numeric|min:2',
+        'poids_stabilite' => 'required|numeric|min:2',
     ]);
+
+    // Vérifier que la somme des poids est égale à 15
+    $somme_poids = $request->poids_ouverture + $request->poids_conscience + 
+                   $request->poids_extraversion + $request->poids_agreabilite + 
+                   $request->poids_stabilite;
+    
+    if ($somme_poids != 15) {
+        return response()->json([
+            'error' => 'La somme des poids des traits de personnalité doit être égale à 15'
+        ], 422);
+    }
 
     $offre = Offre::create([
         'departement' => $request->departement,
@@ -100,6 +116,11 @@ public function ajoutOffre(Request $request)
         'responsabilite' => $request->responsabilite,
         'experience' => $request->experience,
         'matching' => $request->matching ?? 0,
+        'poids_ouverture' => $request->poids_ouverture,
+        'poids_conscience' => $request->poids_conscience,
+        'poids_extraversion' => $request->poids_extraversion,
+        'poids_agreabilite' => $request->poids_agreabilite,
+        'poids_stabilite' => $request->poids_stabilite,
     ]);
 
     // Get the authenticated user (recruiter)
@@ -489,7 +510,31 @@ public function ajoutOffre(Request $request)
              'domaine' => 'nullable|string|max:255',
              'responsabilite' => 'nullable|string',
              'experience' => 'nullable|string',
+             'poids_ouverture' => 'nullable|numeric|min:2',
+             'poids_conscience' => 'nullable|numeric|min:2',
+             'poids_extraversion' => 'nullable|numeric|min:2',
+             'poids_agreabilite' => 'nullable|numeric|min:2',
+             'poids_stabilite' => 'nullable|numeric|min:2',
          ]);
+ 
+         // Vérifier que la somme des poids est égale à 15 si au moins un poids est fourni
+         if (isset($request->poids_ouverture) || isset($request->poids_conscience) || 
+             isset($request->poids_extraversion) || isset($request->poids_agreabilite) || 
+             isset($request->poids_stabilite)) {
+             
+             $somme_poids = 
+                 (isset($request->poids_ouverture) ? $request->poids_ouverture : $offre->poids_ouverture) + 
+                 (isset($request->poids_conscience) ? $request->poids_conscience : $offre->poids_conscience) + 
+                 (isset($request->poids_extraversion) ? $request->poids_extraversion : $offre->poids_extraversion) + 
+                 (isset($request->poids_agreabilite) ? $request->poids_agreabilite : $offre->poids_agreabilite) + 
+                 (isset($request->poids_stabilite) ? $request->poids_stabilite : $offre->poids_stabilite);
+             
+             if ($somme_poids != 15) {
+                 return response()->json([
+                     'error' => 'La somme des poids des traits de personnalité doit être égale à 15'
+                 ], 422);
+             }
+         }
  
          // Mise à jour des champs fournis par la requête
          $offre->update($validatedData);

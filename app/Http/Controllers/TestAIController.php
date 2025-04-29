@@ -6,9 +6,11 @@ use App\Models\PersonnaliteAnalyse;
 use App\Models\ScoreTest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Smalot\PdfParser\Parser;
 use App\Models\Candidat;
 use App\Models\Offre;
+
 class TestAIController extends Controller
 {
     public function generateTest(Request $request)
@@ -52,7 +54,7 @@ class TestAIController extends Controller
         ];
     
         try {
-            $response = Http::timeout(90)->post('http://127.0.0.1:8002/generate-test', [
+            $response = Http::timeout(90)->post('http://127.0.0.1:8003/generate-test', [
                 'offre' => $offreData,
                 'poids' => $poidsData,
             ]);
@@ -81,9 +83,15 @@ class TestAIController extends Controller
             'extraversion' => 'nullable|integer|min:0|max:100',
             'agreabilite' => 'nullable|integer|min:0|max:100',
             'stabilite' => 'nullable|integer|min:0|max:100',
+            'questions' => 'nullable|array',
+            'answers' => 'nullable|array',
         ]);
     
         try {
+            // Calculer les pourcentages selon la nouvelle formule
+            $traitScores = $this->calculateTraitPercentages($request->questions, $request->answers);
+            
+            // Enregistrer le score dans la base de données
             $score = ScoreTest::updateOrCreate(
                 [
                     'candidat_id' => $request->candidat_id,
@@ -91,107 +99,178 @@ class TestAIController extends Controller
                 ],
                 [
                     'score_total' => $request->score_total, 
-                    'ouverture' => $request->ouverture,
-                    'conscience' => $request->conscience,
-                    'extraversion' => $request->extraversion,
-                    'agreabilite' => $request->agreabilite,
-                    'stabilite' => $request->stabilite,
+                    'ouverture' => $traitScores['ouverture'],
+                    'conscience' => $traitScores['conscience'],
+                    'extraversion' => $traitScores['extraversion'],
+                    'agreabilite' => $traitScores['agreabilite'],
+                    'stabilite' => $traitScores['stabilite'],
                 ]
             );
+            
+            // Stocker les questions et réponses dans un fichier JSON
+            if ($request->has('questions') && $request->has('answers')) {
+                $this->storeTestResponses($request, $traitScores);
+            }
     
             return response()->json([
                 'message' => 'Score enregistré avec succès',
                 'score' => $score
             ]);
         } catch (\Exception $e) {
-            \Log::error('Erreur ScoreTest: ' . $e->getMessage()); // optionnel pour log
+            \Log::error('Erreur ScoreTest: ' . $e->getMessage());
             return response()->json(['error' => 'Erreur lors de l\'enregistrement du score: ' . $e->getMessage()], 500);
         }
     }
     
+    /**
+     * Calculer les pourcentages pour chaque trait selon la nouvelle formule
+     * Pourcentage = (somme des scores obtenus / (nombre de questions * score max par question)) * 100
+     */
+    private function calculateTraitPercentages($questions, $answers)
+    {
+        // Initialiser les compteurs pour chaque trait
+        $traitCounts = [
+            'ouverture' => 0,
+            'conscience' => 0,
+            'extraversion' => 0,
+            'agreabilite' => 0,
+            'stabilite' => 0
+        ];
+        
+        // Initialiser les scores pour chaque trait
+        $traitScores = [
+            'ouverture' => 0,
+            'conscience' => 0,
+            'extraversion' => 0,
+            'agreabilite' => 0,
+            'stabilite' => 0
+        ];
+        
+        // Tableau de correspondance pour normaliser les noms de traits
+        $traitMapping = [
+            'ouverture' => 'ouverture',
+            'ouverture d\'esprit' => 'ouverture',
+            'conscience' => 'conscience',
+            'conscienciosité' => 'conscience',
+            'extraversion' => 'extraversion',
+            'agréabilité' => 'agreabilite',
+            'agreabilite' => 'agreabilite',
+            'agréabilite' => 'agreabilite',
+            'stabilité' => 'stabilite',
+            'stabilité émotionnelle' => 'stabilite',
+            'stabilite émotionnelle' => 'stabilite',
+            'névrosisme' => 'stabilite',
+        ];
+        
+        // Parcourir les questions pour compter le nombre de questions par trait
+        foreach ($questions as $index => $question) {
+            $traitOriginal = strtolower($question['trait']);
+            $normalizedTrait = isset($traitMapping[$traitOriginal]) ? $traitMapping[$traitOriginal] : $traitOriginal;
+            
+            if (isset($traitCounts[$normalizedTrait])) {
+                $traitCounts[$normalizedTrait]++;
+            }
+        }
+        
+        // Parcourir les réponses pour calculer les scores par trait
+        foreach ($answers as $answer) {
+            $questionIndex = $answer['question_index'];
+            $question = $questions[$questionIndex];
+            $traitOriginal = strtolower($question['trait']);
+            $normalizedTrait = isset($traitMapping[$traitOriginal]) ? $traitMapping[$traitOriginal] : $traitOriginal;
+            
+            if (isset($traitScores[$normalizedTrait])) {
+                $traitScores[$normalizedTrait] += $answer['score'];
+            }
+        }
+        
+        // Calculer les pourcentages selon la formule: (score obtenu / (nombre de questions * 5)) * 100
+        $percentages = [];
+        foreach ($traitScores as $trait => $score) {
+            $questionCount = $traitCounts[$trait];
+            $maxPossibleScore = $questionCount * 5; // 5 est le score maximum par question
+            
+            // Éviter la division par zéro
+            if ($maxPossibleScore > 0) {
+                $percentages[$trait] = round(($score / $maxPossibleScore) * 100);
+            } else {
+                $percentages[$trait] = 0;
+            }
+        }
+        
+        return $percentages;
+    }
     
-
-
-    // public function generateImageQuestion(Request $request)
-    // {
-    //     // Récupérer le candidat et l'offre depuis la base de données
-    //     $candidat = Candidat::find($request->candidat_id);
-    //     $offre = Offre::find($request->offre_id);
+    /**
+     * Stocker les questions et réponses du test dans un fichier JSON
+     */
+    private function storeTestResponses(Request $request, $traitScores = null)
+    {
+        try {
+            $candidatId = $request->candidat_id;
+            $offreId = $request->offre_id;
+            
+            // Créer le dossier de stockage s'il n'existe pas
+            $storagePath = storage_path('app/tests');
+            if (!file_exists($storagePath)) {
+                mkdir($storagePath, 0755, true);
+            }
+            
+            // Utiliser les scores calculés s'ils sont fournis, sinon utiliser ceux de la requête
+            $scores = $traitScores ?: [
+                'total' => $request->score_total,
+                'ouverture' => $request->ouverture,
+                'conscience' => $request->conscience,
+                'extraversion' => $request->extraversion,
+                'agreabilite' => $request->agreabilite,
+                'stabilite' => $request->stabilite,
+            ];
+            
+            // Préparer les données à stocker
+            $testData = [
+                'candidat_id' => $candidatId,
+                'offre_id' => $offreId,
+                'questions' => $request->questions,
+                'answers' => $request->answers,
+                'scores' => $scores,
+                'completed_at' => now()->toDateTimeString(),
+            ];
+            
+            // Nom du fichier basé sur candidat_id et offre_id
+            $filename = "test_{$candidatId}_{$offreId}.json";
+            
+            // Enregistrer le fichier JSON
+            file_put_contents("{$storagePath}/{$filename}", json_encode($testData, JSON_PRETTY_PRINT));
+            
+            \Log::info("Test responses stored for candidat {$candidatId}, offre {$offreId}");
+            
+            return true;
+        } catch (\Exception $e) {
+            \Log::error("Error storing test responses: " . $e->getMessage());
+            return false;
+        }
+    }
     
-    //     if (!$candidat || !$offre) {
-    //         return response()->json(['error' => 'Candidat ou offre non trouvé'], 404);
-    //     }
-    
-    //     // Vérifier si le fichier PDF du CV existe
-    //     $cvPath = storage_path('app/public/' . $candidat->cv);
-    //     if (!file_exists($cvPath)) {
-    //         return response()->json(['error' => 'Fichier CV introuvable'], 404);
-    //     }
-    
-    //     // Convertir le CV PDF en texte
-    //     try {
-    //         $pdfParser = new Parser();
-    //         $pdf = $pdfParser->parseFile($cvPath);
-    //         $cv_text = $pdf->getText();
-    //     } catch (\Exception $e) {
-    //         return response()->json(['error' => 'Erreur lors de la lecture du CV : ' . $e->getMessage()], 500);
-    //     }
-    
-    //     // Envoyer à FastAPI pour générer la question-image
-    //     $response = Http::post('http://127.0.0.1:8002/generate-image-question', [
-    //         'cv' => $cv_text,
-    //         'offre' => $offre->description
-    //     ]);
-    
-    //     if ($response->successful()) {
-    //         return response()->json($response->json());
-    //     } else {
-    //         return response()->json(['error' => 'Erreur lors de la génération de l\'image'], 500);
-    //     }
-    // }
-    // public function analyzePersonality(Request $request)
-    // {
-    //     // Validation des entrées
-    //     $validated = $request->validate([
-    //         'image_url' => 'required|string',
-    //         'image_prompt' => 'required|string',
-    //         'description' => 'required|string',
-    //         'candidat_id' => 'required|exists:candidats,id', // Assurez-vous que candidat existe
-    //         'offre_id' => 'required|exists:offres,id', // Assurez-vous que l'offre existe
-    //     ]);
-
-    //     // Préparer les données pour l'appel API
-    //     $data = [
-    //         'image_url' => $validated['image_url'],
-    //         'image_prompt' => $validated['image_prompt'],
-    //         'description' => $validated['description'],
-    //     ];
-
-    //     // Effectuer la requête HTTP vers l'API FastAPI
-    //     try {
-    //         $response = Http::post('http://127.0.0.1:8002/analyze-personality', $data);
-
-    //         // Vérifier si la requête a réussi
-    //         if ($response->successful()) {
-    //             $personalityAnalysis = $response->json()['personality_analysis'];
-
-    //             // Enregistrer l'analyse de personnalité dans la base de données
-    //             PersonnaliteAnalyse::create([
-    //                 'candidat_id' => $validated['candidat_id'],
-    //                 'offre_id' => $validated['offre_id'],
-    //                 'personnalite' => $personalityAnalysis,
-    //             ]);
-
-    //             // Retourner la réponse JSON
-    //             return response()->json([
-    //                 'personality_analysis' => $personalityAnalysis
-    //             ]);
-    //         } else {
-    //             return response()->json(['error' => 'Erreur lors de l\'analyse de la personnalité'], 500);
-    //         }
-    //     } catch (\Exception $e) {
-    //         return response()->json(['error' => 'Erreur interne : ' . $e->getMessage()], 500);
-    //     }
-    // }
-    
+    /**
+     * Récupérer les questions et réponses du test pour un candidat et une offre
+     */
+    public function getTestResponses($candidatId, $offreId)
+    {
+        try {
+            $storagePath = storage_path('app/tests');
+            $filename = "test_{$candidatId}_{$offreId}.json";
+            $filePath = "{$storagePath}/{$filename}";
+            
+            if (!file_exists($filePath)) {
+                return response()->json(['error' => 'Test non trouvé'], 404);
+            }
+            
+            $testData = json_decode(file_get_contents($filePath), true);
+            
+            return response()->json($testData);
+        } catch (\Exception $e) {
+            \Log::error("Error retrieving test responses: " . $e->getMessage());
+            return response()->json(['error' => 'Erreur lors de la récupération du test'], 500);
+        }
+    }
 }
